@@ -1,0 +1,6 @@
+{
+  "name": "CodeForge",
+  "description": "Professional Visual Studio Code IDE clone for Android with Monaco editor, integrated terminal, Git source control, file explorer, and custom themes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CodeForge Monaco Editor</title>
+    <link rel="stylesheet" href="vs/editor/editor.main.css">
+    <style>
+        * {
+            box-sizing: border-box;
+            -webkit-touch-callout: none;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #1E1E1E;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        #container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+        }
+        /* Mobile touch improvement for Monaco */
+        .monaco-editor .lines-content {
+            user-select: text !important;
+            -webkit-user-select: text !important;
+        }
+        .monaco-editor, .monaco-editor .inputarea.ime-input {
+            font-variant-ligatures: normal;
+        }
+        /* VS Code Theme styling tweaks */
+        .monaco-editor {
+            --vscode-editor-background: #1E1E1E;
+            --vscode-editor-foreground: #D4D4D4;
+        }
+    </style>
+</head>
+<body>
+<div id="container"></div>
+
+<script src="vs/loader.min.js"></script>
+<script>
+    // Configure Monaco Environment for offline / WebView execution
+    window.MonacoEnvironment = {
+        getWorker: function (moduleId, label) {
+            // Use inline worker to prevent file:// protocol security restrictions in Android WebView
+            var workerBlob = new Blob([
+                'self.onmessage = function (e) { /* background tokenization placeholder */ };'
+            ], { type: 'application/javascript' });
+            return new Worker(URL.createObjectURL(workerBlob));
+        }
+    };
+
+    require.config({
+        paths: {
+            'vs': './vs'
+        }
+    });
+
+    var editor = null;
+    var currentModel = null;
+    var isInternalChange = false;
+    var currentTheme = 'vs-dark';
+
+    require(['vs/editor/editor.main'], function () {
+        // Initialize Monaco Editor
+        editor = monaco.editor.create(document.getElementById('container'), {
+            value: "// Welcome to CodeForge\n// Full VS Code IDE for Android\n",
+            language: 'javascript',
+            theme: 'vs-dark',
+            automaticLayout: true,
+            fontSize: 14,
+            fontFamily: "'Menlo', 'Consolas', 'Courier New', monospace",
+            lineHeight: 21,
+            letterSpacing: 0.2,
+            minimap: { enabled: true, renderCharacters: false, maxColumn: 80 },
+            wordWrap: 'on',
+            lineNumbers: 'on',
+            glyphMargin: true,
+            folding: true,
+            bracketPairColorization: { enabled: true },
+            autoClosingBrackets: 'always',
+            autoClosingQuotes: 'always',
+            renderWhitespace: 'none',
+            scrollBeyondLastLine: false,
+            smoothScrolling: true,
+            cursorBlinking: 'smooth',
+            cursorSmoothCaretAnimation: 'on',
+            cursorWidth: 2,
+            dragAndDrop: true,
+            formatOnPaste: true,
+            formatOnType: true,
+            suggestOnTriggerCharacters: true,
+            quickSuggestions: { other: true, comments: false, strings: true },
+            parameterHints: { enabled: true },
+            overviewRulerBorder: false,
+            fixedOverflowWidgets: true,
+            touchSupport: true,
+            tabSize: 4,
+            insertSpaces: true
+        });
+
+        // Content changed listener
+        editor.onDidChangeModelContent(function (e) {
+            if (isInternalChange) return;
+            if (window.CodeForgeBridge) {
+                var content = editor.getValue();
+                window.CodeForgeBridge.onContentChanged(content);
+            }
+        });
+
+        // Cursor position changed listener
+        editor.onDidChangeCursorPosition(function (e) {
+            if (window.CodeForgeBridge) {
+                var pos = e.position;
+                var selection = editor.getSelection();
+                var selectedLength = 0;
+                if (selection && !selection.isEmpty()) {
+                    selectedLength = Math.abs(selection.endColumn - selection.startColumn);
+                }
+                window.CodeForgeBridge.onCursorPositionChanged(pos.lineNumber, pos.column, selectedLength);
+            }
+        });
+
+        // Markers / Diagnostics changed listener
+        monaco.editor.onDidChangeMarkers(function (uris) {
+            if (window.CodeForgeBridge && editor && editor.getModel()) {
+                var markers = monaco.editor.getModelMarkers({ resource: editor.getModel().uri });
+                window.CodeForgeBridge.onMarkersChanged(JSON.stringify(markers));
+            }
+        });
+
+        // Notify Android that Monaco is initialized and ready
+        if (window.CodeForgeBridge) {
+            window.CodeForgeBridge.onEditorReady();
+        }
+    });
+
+    // Public API accessible to Android via evaluateJavascript:
+    function setFileContent(content, language, filePath, readOnly) {
+        if (!editor) return;
+        isInternalChange = true;
+        try {
+            var uri = monaco.Uri.file(filePath || 'untitled');
+            var oldModel = editor.getModel();
+            
+            var newModel = monaco.editor.createModel(content, language || 'plaintext', uri);
+            editor.setModel(newModel);
+            
+            if (oldModel && oldModel !== newModel) {
+                oldModel.dispose();
+            }
+            editor.updateOptions({ readOnly: !!readOnly });
+        } finally {
+            isInternalChange = false;
+        }
+    }
+
+    function getEditorContent() {
+        if (!editor) return "";
+        return editor.getValue();
+    }
+
+    function setEditorTheme(theme) {
+        if (!window.monaco) return;
+        currentTheme = theme;
+        monaco.editor.setTheme(theme);
+    }
+
+    function updateOptions(optionsJson) {
+        if (!editor) return;
+        try {
+            var options = JSON.parse(optionsJson);
+            editor.updateOptions(options);
+        } catch (e) {
+            console.error("Failed to parse options", e);
+        }
+    }
+
+    function insertText(text) {
+        if (!editor) return;
+        var selection = editor.getSelection();
+        var id = { major: 1, minor: 1 };
+        var op = { identifier: id, range: selection, text: text, forceMoveMarkers: true };
+        editor.executeEdits("mobile-accessory", [op]);
+        editor.focus();
+    }
+
+    function formatCode() {
+        if (!editor) return;
+        editor.getAction('editor.action.formatDocument').run();
+    }
+
+    function triggerUndo() {
+        if (!editor) return;
+        editor.trigger('android', 'undo');
+    }
+
+    function triggerRedo() {
+        if (!editor) return;
+        editor.trigger('android', 'redo');
+    }
+
+    function triggerFind() {
+        if (!editor) return;
+        editor.getAction('actions.find').run();
+    }
+
+    function triggerReplace() {
+        if (!editor) return;
+        editor.getAction('editor.action.startFindReplaceAction').run();
+    }
+
+    function triggerComment() {
+        if (!editor) return;
+        editor.getAction('editor.action.commentLine').run();
+    }
+
+    function triggerSelectAll() {
+        if (!editor) return;
+        editor.setSelection(editor.getModel().getFullModelRange());
+    }
+
+    function goToLine(line, col) {
+        if (!editor) return;
+        var lineNumber = parseInt(line, 10) || 1;
+        var column = parseInt(col, 10) || 1;
+        editor.revealLineInCenter(lineNumber);
+        editor.setPosition({ lineNumber: lineNumber, column: column });
+        editor.focus();
+    }
+</script>
+</body>
+</html>
